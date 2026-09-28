@@ -90,7 +90,7 @@ fn main() ->std::io::Result<()> {
     let hb = skip_partial_frame(&mut data_source);
 
     let hb_t0 = hb.frame();        // our t0 frame.
-    dump_data(&mut data_source, hb_t0, &mut ring_file);
+    dump_data(&mut data_source, hb_t0, sid, &mut ring_file);
 
     // The end run item:
 
@@ -122,13 +122,14 @@ fn skip_partial_frame(src : &mut mikumari_format::MikumariReader) ->
 
 }
 // t0 - the frame # of t0.
+// sid - the user-provided source id.
 // We're going to try to make the times into absolutes as well.
 // Ring items we make:
 //   These consist of raw hit values.
 //   the timestamp comes from the relative frame_no, but the first
 //   u64 bit item is the absolute frame number.
 //
-fn dump_data(src : &mut mikumari_format::MikumariReader, t0 : u64, rf : &mut Box<dyn DataSink>) {
+fn dump_data(src : &mut mikumari_format::MikumariReader, t0 : u64, sid: u32, rf : &mut Box<dyn DataSink>) {
     let mut frame_no = 0;                       // THe current frame number.
     let mut absolute_frame = t0;
 
@@ -137,7 +138,7 @@ fn dump_data(src : &mut mikumari_format::MikumariReader, t0 : u64, rf : &mut Box
     let mut ring_item = RingItem::new_with_body_header(
         mikumari_format::MIKUMARI_FRAME_ITEM_TYPE,
         hb_frame_to_ts(frame_no) as u64,
-        0, 0
+        sid, 0
      );
      ring_item.add(absolute_frame);
     while let Ok(data) = src.read() {
@@ -160,7 +161,7 @@ fn dump_data(src : &mut mikumari_format::MikumariReader, t0 : u64, rf : &mut Box
                 ring_item = RingItem::new_with_body_header(
                     mikumari_format::MIKUMARI_FRAME_ITEM_TYPE,
                     hb_frame_to_ts(frame_no) as u64,
-                    0,0
+                    sid,0
                 );
                 ring_item.add(absolute_frame);
             }
