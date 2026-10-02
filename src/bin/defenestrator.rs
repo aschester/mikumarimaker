@@ -7,10 +7,10 @@ use clap::{value_parser, Arg, ArgAction, Command};
 
 // Ring items generated will  be PHYSICS_EVENT 
 // Output will be 
-// | Absolute frame number | 64 bits.
 // zero or more repetitions of hits of the form:
 // | r/f channel           | 16 bits, top bit is 1 for trailing edge.
 // | absolute-time         | 64 bits. computed by adding the timestamp to the hit time.
+// | Absolute frame number | 64 bits.
 //
 //   If I've done arithmetic properly, it's 213 days before the absolute time should
 //   wrap.
@@ -34,7 +34,6 @@ fn main() {
 
     let matches = parser.get_matches();
 
-    
     // Process the command line arguments.
 
     let ring_uri = matches.get_one::<String>("source").expect("No data source given");
@@ -95,7 +94,6 @@ fn convert_item(item : &RingItem, glom  : &mut glom::Glom) {
 
         let mut cursor = size_of::<u64>() + 2 * size_of::<u32>(); // skip body header.
         let absolute_fno = u64::from_ne_bytes(payload[cursor..cursor+size_of::<u64>()].try_into().unwrap());
-        glom.add_frame_boundary(absolute_fno);
 
         // Sort the hits and add them to the glommer:
 
@@ -115,7 +113,7 @@ fn convert_item(item : &RingItem, glom  : &mut glom::Glom) {
                     let t : u64 = te.time() as u64 + t0;
                     orderer.add_hit(false, te.channel() as u16, t, te.tot());
                 },
-                _ => {},              // ANything else is not passed through.
+                _ => {},              // Anything else is not passed through.
             }
 
             cursor += size_of::<u64>();
@@ -128,8 +126,7 @@ fn convert_item(item : &RingItem, glom  : &mut glom::Glom) {
             glom.add_hit(*rising, *chan as u8, *time, *tot);
         }
 
-
-        
+        // Trailing frame boundry: …[frame f hits][marker f][frame f+1 hits]…
+        glom.add_frame_boundary(absolute_fno);
     }
-        
 }

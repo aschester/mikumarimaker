@@ -1,5 +1,4 @@
 use mikumarimaker::mikumari_format;
-use std::process::exit;
 
 use std::io::{stdin, BufReader, Read};
 use std::fs::File;
@@ -83,14 +82,10 @@ fn main() ->std::io::Result<()> {
     );
     ring_file.write(&begin_run.to_raw()).expect("Failed to write begin run item to sink.");
 
-    // Mikumari data has a partial frame at the front. We _could_
-    // figure out how to timestamp it, but, instead, we'll just skip
-    // that data as that seems to be standard.
+    // Start accumulating and writing data from the source to the ring item sink. 
+    // The run is encapsulated by the begin and end run items.
 
-    let hb = skip_partial_frame(&mut data_source);
-
-    let hb_t0 = hb.frame();        // our t0 frame.
-    dump_data(&mut data_source, hb_t0, sid, &mut ring_file);
+    dump_data(&mut data_source, sid, &mut ring_file);
 
     // The end run item:
 
@@ -106,73 +101,73 @@ fn main() ->std::io::Result<()> {
     ring_file.flush();     // Probably not needed but what the heck.
     Ok(())
 }
-fn skip_partial_frame(src : &mut mikumari_format::MikumariReader) ->
-    mikumari_format::Delimeter1
-{
-    
-    while let Ok(data) = src.read() {
-        if let mikumari_format::MikumariDatum::Heartbeat0(d1) = data {
-            return d1;
-        }
-    }
-    // We had an error before finding a heartbeat.
 
-    eprintln!("Did not find the first heartbeat before eof or read error");
-    exit(-1);
+//  * sid  - user source id, stamped on every frame item.
+// Ring items are built by buffering hits and emitting them when the trailing heartbeat that 
+// closes the frame arrives. That heartbeat's frame number labels and timestamps every hit 
+// that preceded it.
+//  * The ring item body looks like: [absolute frame number : u64][raw hit 0: u64]...
+//  * The body-header timestamp is relative (first emitted frame = 0) and is
+//    advanced by the real heartbeat-to-heartbeat frame delta, so dropped
+//    frames and the 24-bit frame-number rollover are handled correctly.
+//  * Hits after the final heartbeat have no closing heartbeat, so that trailing
+//    partial frame cannot be timestamped and is discarded at EOF.
+fn dump_data(src: &mut mikumari_format::MikumariReader, sid: u32,
+             rf: &mut Box<dyn DataSink>) {
+    let mut buf: Vec<u64> = Vec::new();        // raw hit words for the open frame
+    let mut first_frame: Option<u64> = None;   // frame no. of the first heartbeat
+    let mut prev_frame: u64 = 0;               // previous heartbeat's 24-bit frame number
+    let mut rel_frame: u64 = 0;                // relative frame index (0-indexed)
 
-}
-// t0 - the frame # of t0.
-// sid - the user-provided source id.
-// We're going to try to make the times into absolutes as well.
-// Ring items we make:
-//   These consist of raw hit values.
-//   the timestamp comes from the relative frame_no, but the first
-//   u64 bit item is the absolute frame number.
-//
-fn dump_data(src : &mut mikumari_format::MikumariReader, t0 : u64, sid: u32, rf : &mut Box<dyn DataSink>) {
-    let mut frame_no = 0;                       // THe current frame number.
-    let mut absolute_frame = t0;
-
-    // start a ring item for the first frame:
-
-    let mut ring_item = RingItem::new_with_body_header(
-        mikumari_format::MIKUMARI_FRAME_ITEM_TYPE,
-        hb_frame_to_ts(frame_no) as u64,
-        sid, 0
-     );
-     ring_item.add(absolute_frame);
     while let Ok(data) = src.read() {
         match data {
-            mikumari_format::MikumariDatum::LeadingEdge(le) => {
-                ring_item.add(le.get());  // ISsue #11 Already includes the TOT field.
-            },
-            mikumari_format::MikumariDatum::TrailingEdge(te) => {
-                ring_item.add(te.get());  // ISsue #11 Already includes the TOT field.
-            }
-            mikumari_format::MikumariDatum::Heartbeat0(_d) => {
-                // Heart beat means we write the item and 
-                // start a new one:
-                rf.write(&ring_item).expect("Failed to write a ring item to data sink.");
-            
-                frame_no += 1;                   // Next frame.
-                absolute_frame += 1;
-                // Start the new ring item:
+            // Accumulate hits (raw words already carry channel, TOT, within-frame time).
+            mikumari_format::MikumariDatum::LeadingEdge(le)  => buf.push(le.get()),
+            mikumari_format::MikumariDatum::TrailingEdge(te) => buf.push(te.get()),
 
-                ring_item = RingItem::new_with_body_header(
+            // Trailing heartbeat: it closes the frame these buffered hits belong to.
+            mikumari_format::MikumariDatum::Heartbeat0(d1) => {
+                let current_frame = d1.frame();      // 24-bit trailing frame number
+                match first_frame {
+                    None => {                        // first heartbeat -> relative frame 0
+                        first_frame = Some(current_frame);
+                        rel_frame = 0;
+                    }
+                    Some(_) => {                     // advance by the real frame delta
+                        let delta = current_frame.wrapping_sub(prev_frame) & 0xffffff; // drops + rollover
+                        if delta != 1 {              // warn if non-consecutive frame numbers (stderr)
+                            eprintln!(
+                                "WARNING: non-consecutive frame: prev={} current={} delta={} (expected 1)",
+                                prev_frame, current_frame, delta
+                            );        
+                        }
+                        rel_frame += delta;
+                    }
+                }
+                prev_frame = current_frame;
+
+                let abs_frame = first_frame.unwrap() + rel_frame;   // non-rolling u64
+                let mut item = RingItem::new_with_body_header(
                     mikumari_format::MIKUMARI_FRAME_ITEM_TYPE,
-                    hb_frame_to_ts(frame_no) as u64,
-                    sid,0
+                    hb_frame_to_ts(rel_frame) as u64,
+                    sid, 0,
                 );
-                ring_item.add(absolute_frame);
+                item.add(abs_frame);
+                for w in &buf {
+                    item.add(*w);
+                }
+                rf.write(&item).expect("Failed to write a ring item to data sink.");
+                buf.clear();
             }
+
+            // Delimiter 2 and everything else carry no hit data for us.
             mikumari_format::MikumariDatum::Heartbeat1(_d) => (),
-            mikumari_format::MikumariDatum::Other(_d) => (),
+            mikumari_format::MikumariDatum::Other(_d)      => (),
         }
     }
-    // Flush the last ring item out:
-  
-    rf.write(&ring_item).expect("Failed to write ring item to data sink.");
-    
+    // Whatever is still in `buf` came after the last heartbeat: an unclosed
+    // partial frame with no frame number and therefore no timestamp. It is 
+    // discarded at EOF.
 }
 
 // Convert a frame number to a mikumari timestamp:
