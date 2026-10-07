@@ -31,10 +31,10 @@ fn main() ->std::io::Result<()> {
             .value_parser(value_parser!(u32))
         )
         .arg(Arg::new("source").required(true).action(ArgAction::Set)
-        .help("Source filename, or '-' for stdin")
+        .help("Data source filename, or '-' for stdin")
         )
         .arg(Arg::new("sink").required(true).action(ArgAction::Set)
-            .help("Sink URI")
+            .help("Data sink URI")
         );
     let matches = parser.get_matches();
 

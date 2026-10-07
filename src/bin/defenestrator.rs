@@ -30,8 +30,8 @@ fn main() {
             .action(ArgAction::Set)
             .value_parser(value_parser!(u64))
         )
-        .arg(Arg::new("source").required(true).help("Data Source URI"))
-        .arg(Arg::new("sink").required(true).help("Data Sink URI"));
+        .arg(Arg::new("source").required(true).help("Data source URI"))
+        .arg(Arg::new("sink").required(true).help("Data sink URI"));
 
     let matches = parser.get_matches();
 
