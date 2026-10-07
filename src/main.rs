@@ -9,7 +9,8 @@ use frib_datasource::{data_sink_factory, DataSink};
 use clap::{value_parser, Arg, ArgAction, Command, ArgMatches};
 use std::time;
 
-const TICKS_PER_HB_FRAME = 1 << 29;  // 2^29 ticks per heartbeat frame
+// 524.288 us/frame * 10^6 us/ps / 0.9765625 ps/tick = 2^29 ticks/frame
+const TICKS_PER_HB_FRAME: u64 = 1 << 29;
 
 ///
 /// We're going to support the following optional uhm.. options.
@@ -150,7 +151,7 @@ fn dump_data(src: &mut mikumari_format::MikumariReader, sid: u32,
                 let abs_frame = first_frame.unwrap() + rel_frame;   // non-rolling u64
                 let mut item = RingItem::new_with_body_header(
                     mikumari_format::MIKUMARI_FRAME_ITEM_TYPE,
-                    hb_frame_to_ts(rel_frame) as u64,
+                    hb_frame_to_ts(rel_frame),
                     sid, 0,
                 );
                 item.add(abs_frame);
@@ -173,17 +174,19 @@ fn dump_data(src: &mut mikumari_format::MikumariReader, sid: u32,
 
 // Convert a frame number to a mikumari timestamp:
 
-fn hb_frame_to_ts(frame: u64) -> f64 {
-    let frame_t : f64 = frame as f64 * TICKS_PER_HB_FRAME; // frame_time in usec.
+fn hb_frame_to_ts(frame: u64) -> u64 {
+    frame * TICKS_PER_HB_FRAME // Frame time in clock ticks.
 }
 
 fn get_title(parsed : &ArgMatches) -> String {
     parsed.get_one::<String>("title").expect("there should have been a default title").clone()
 }
+
 fn get_run(parsed : &ArgMatches) -> u32 {
     let result : u32 = *parsed.get_one::<u32>("run").expect("there should be a default run number");
     result
 }
+
 fn get_source_id(parsed: &ArgMatches) -> u32 {
     *parsed.get_one::<u32>("source-id").expect("There should be a default source-id")
 }
