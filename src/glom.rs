@@ -139,6 +139,7 @@ impl Glom {
         }
     }
 }
+
 #[cfg(test)]
 mod glom_tests {
     use super::*;

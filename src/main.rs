@@ -9,17 +9,18 @@ use frib_datasource::{data_sink_factory, DataSink};
 use clap::{value_parser, Arg, ArgAction, Command, ArgMatches};
 use std::time;
 
+const TICKS_PER_HB_FRAME = 1 << 29;  // 2^29 ticks per heartbeat frame
 
-const HEART_BEAT_MICROSECONDS : f64 = 524.288; // Time between heart beats.
-const TDC_TICK_PS : f64 = 0.9765625;           // LSB value for tdc.
-
+///
 /// We're going to support the following optional uhm.. options.
-/// --title - a run title.
-/// --run   - a run number.
-/// --source-id -an event source id.
+/// --title     - a run title.
+/// --run       - a run number.
+/// --source-id - an event source id.
 ///
 
 fn main() ->std::io::Result<()> {
+
+    // Parse the args:
 
     let parser = Command::new("mikumarimaker")
         .version("0.1.1")
@@ -38,11 +39,11 @@ fn main() ->std::io::Result<()> {
         .arg(Arg::new("sink").required(true).action(ArgAction::Set));
     let matches = parser.get_matches();
 
-    // Let's get the title, run number and source id given the arguments
+    // Let's get the title, run number and source id given the arguments:
 
     let title = get_title(&matches);
     let run_num = get_run(&matches);
-    let sid     = get_source_id(&matches);
+    let sid = get_source_id(&matches);
     
     
     let fname = matches.get_one::<String>("source").expect("Source filename is required").clone();
@@ -63,17 +64,17 @@ fn main() ->std::io::Result<()> {
 
     let mut data_source = mikumari_format::MikumariReader::new(source);
     
-    // Open the output ring item - or ring buffer.
+    // Open the output ring item - or ring buffer:
 
     let mut ring_file = data_sink_factory(&ring_name).expect("Unable to open data sink"); 
 
     // Set up to encapsulate the run:
 
-    let begin_run_time = time::Instant::now();  // start time of the run.
-    let mut b       = BodyHeader {
-        timestamp: 0xffffffffffffffff,       // EVB assign timestamp.
+    let begin_run_time = time::Instant::now();  // Start time of the run.
+    let mut b = BodyHeader {
+        timestamp: 0xffffffffffffffff,          // EVB assign timestamp.
         source_id : sid,
-        barrier_type: 1                     // begin run barrier.
+        barrier_type: 1                         // Begin run barrier.
     };
     let begin_run = StateChange::new_with_body_header(
         StateChangeType::Begin,
@@ -173,8 +174,7 @@ fn dump_data(src: &mut mikumari_format::MikumariReader, sid: u32,
 // Convert a frame number to a mikumari timestamp:
 
 fn hb_frame_to_ts(frame: u64) -> f64 {
-    let frame_t : f64 = frame as f64 * HEART_BEAT_MICROSECONDS; // frame_time in usec.
-    (frame_t * (1.0e6)) / TDC_TICK_PS
+    let frame_t : f64 = frame as f64 * TICKS_PER_HB_FRAME; // frame_time in usec.
 }
 
 fn get_title(parsed : &ArgMatches) -> String {
