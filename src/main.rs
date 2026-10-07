@@ -102,7 +102,7 @@ fn main() ->std::io::Result<()> {
 /// number labels and timestamps every hit that preceded it.
 ///
 /// * `sid` - user source id, stamped on every frame item.
-/// * Body layout: `[absolute frame number : u64][raw hit 0 : u64]...`
+/// * Body layout: `[mikumari frame number : u64 - raw, rolls at 2^24][raw hit 0 : u64]...`
 /// * The body-header timestamp is relative (first emitted frame = 0), advanced
 ///   by the real heartbeat-to-heartbeat frame delta, so dropped frames and the
 ///   24-bit frame-number rollover are handled correctly.
@@ -110,10 +110,10 @@ fn main() ->std::io::Result<()> {
 ///   partial frame is discarded at EOF.
 fn dump_data(src: &mut mikumari_format::MikumariReader, sid: u32,
              rf: &mut Box<dyn DataSink>) {
-    let mut buf: Vec<u64> = Vec::new();        // raw hit words for the open frame
-    let mut first_frame: Option<u64> = None;   // frame no. of the first heartbeat
-    let mut prev_frame: u64 = 0;               // previous heartbeat's 24-bit frame number
-    let mut rel_frame: u64 = 0;                // relative frame index (0-indexed)
+    let mut buf: Vec<u64> = Vec::new();        // Raw hit words for the open frame.
+    let mut seen_first = false;                // True after the first heartbeat.
+    let mut prev_frame: u64 = 0;               // Previous heartbeat's 24-bit frame number.
+    let mut rel_frame: u64 = 0;                // Relative frame index (0-indexed).
 
     while let Ok(data) = src.read() {
         match data {
@@ -123,32 +123,26 @@ fn dump_data(src: &mut mikumari_format::MikumariReader, sid: u32,
 
             // Trailing heartbeat: it closes the frame these buffered hits belong to.
             mikumari_format::MikumariDatum::Heartbeat0(d1) => {
-                let current_frame = d1.frame();      // 24-bit trailing frame number
-                match first_frame {
-                    None => {                        // first heartbeat -> relative frame 0
-                        first_frame = Some(current_frame);
-                        rel_frame = 0;
+                let current_frame = d1.frame();      // 24-bit trailing frame number.
+                if !seen_first {
+                    seen_first = true;               // First heartbeat -> rel_frame stays 0
+                } else {
+                    // 24-bit wrapping subtraction: 0xffffff -> 0x000000 is a delta of 1, not 0xfffffe.
+                    let delta = current_frame.wrapping_sub(prev_frame) & 0xffffff;
+                    if delta != 1 {
+                        eprintln!("WARNING: non-consecutive frame: prev={} current={} delta={} (expected 1)",
+                                prev_frame, current_frame, delta);
                     }
-                    Some(_) => {                     // advance by the real frame delta
-                        let delta = current_frame.wrapping_sub(prev_frame) & 0xffffff; // drops + rollover
-                        if delta != 1 {              // warn if non-consecutive frame numbers (stderr)
-                            eprintln!(
-                                "WARNING: non-consecutive frame: prev={} current={} delta={} (expected 1)",
-                                prev_frame, current_frame, delta
-                            );        
-                        }
-                        rel_frame += delta;
-                    }
+                    rel_frame += delta;
                 }
                 prev_frame = current_frame;
 
-                let abs_frame = first_frame.unwrap() + rel_frame;   // non-rolling u64
                 let mut item = RingItem::new_with_body_header(
                     mikumari_format::MIKUMARI_FRAME_ITEM_TYPE,
                     hb_frame_to_ts(rel_frame),
                     sid, 0,
                 );
-                item.add(abs_frame);
+                item.add(current_frame);
                 for w in &buf {
                     item.add(*w);
                 }
@@ -166,8 +160,12 @@ fn dump_data(src: &mut mikumari_format::MikumariReader, sid: u32,
     // discarded at EOF.
 }
 
-// Convert a frame number to a mikumari timestamp:
-
+/// Convert a frame number to a Mikumari timestamp.
+/// ### Parameters
+/// * `frame` - The relative frame number (0-indexed) to convert to a timestamp.
+/// ### Returns
+/// The timestamp in clock ticks (1/1024 ns per tick) corresponding to the
+/// given frame number.
 fn hb_frame_to_ts(frame: u64) -> u64 {
     frame * TICKS_PER_HB_FRAME // Frame time in clock ticks.
 }

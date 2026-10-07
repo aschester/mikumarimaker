@@ -110,11 +110,11 @@ impl Glom {
     /// Add a hit.  We construct the channel number word from the channel 
     /// number and leading flag. There are two cases to handle: 
     /// 1. t0 is None. 
-    ///     We are a first hit and set t0 to Some(time) and add the 
-    ///     channel/time to the hits vector. 
+    ///      We are a first hit and set t0 to Some(time) and add the 
+    ///      channel/time to the hits vector. 
     /// 2. t0 is Some. 
-    ///    If we are in the glom interval we just add our hit, otherwise,
-    ///    flush and start a new event.
+    ///      If we are in the glom interval we just add our hit, otherwise,
+    ///      flush and start a new event.
     /// 
     /// ###  Parameters
     /// * leading - True if this is a leading edge hit.
@@ -571,7 +571,7 @@ mod orderer_tests {
         }
         times.sort();
         let ordered = o.order();
-        
+
         assert_eq!(ordered.len(), 50);
         for i in 0..50 {
             assert_eq!(ordered[i].2, times[i]);

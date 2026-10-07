@@ -62,7 +62,6 @@ fn main() {
 
 }
 
-
 fn convert_item(item : &RingItem, glom  : &mut glom::Glom) {
     // If the ring item is not a MIKUMARI frame, just pass it unaltered.
     let item_type = item.type_id();
