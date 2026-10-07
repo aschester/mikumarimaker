@@ -30,8 +30,12 @@ fn main() ->std::io::Result<()> {
             .required(false).default_value("0")
             .value_parser(value_parser!(u32))
         )
-        .arg(Arg::new("source").required(true).action(ArgAction::Set))
-        .arg(Arg::new("sink").required(true).action(ArgAction::Set));
+        .arg(Arg::new("source").required(true).action(ArgAction::Set)
+        .help("Source filename, or '-' for stdin")
+        )
+        .arg(Arg::new("sink").required(true).action(ArgAction::Set)
+            .help("Sink URI")
+        );
     let matches = parser.get_matches();
 
     // Let's get the title, run number and source id given the arguments:
