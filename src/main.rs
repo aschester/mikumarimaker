@@ -283,8 +283,9 @@ mod dump_data_tests {
         assert_eq!((items[1].body[0], items[1].timestamp), (102, 2 * TICKS_PER_HB_FRAME)); // +2, not +1
     }
 
-    // 24-bit rollover 0xffffff -> 0x000000 is a delta of 1 (rollover protection):
-    // no gap, and the ABSOLUTE counter keeps counting as a non-rolling u64.
+    // 24-bit rollover 0xffffff -> 0x000000: the `& 0xffffff` masks the wrap to a
+    // delta of 1, so the relative counter advances one frame with no false
+    // gap/warning. The body stores the raw Mikumari frame number, so it wraps to 0.
     #[test]
     fn frame_rollover_is_one_step() {
         let items = run(&[hit(0,1,1), hb(0xffffff),
@@ -292,7 +293,7 @@ mod dump_data_tests {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].body[0], 0xffffff);
         assert_eq!(items[0].timestamp, 0);
-        assert_eq!(items[1].body[0], 0x1000000);   // first(0xffffff)+rel(1), not wrapped to 0
-        assert_eq!(items[1].timestamp, TICKS_PER_HB_FRAME); // delta == 1 -> advances one frame
+        assert_eq!(items[1].body[0], 0x0000000);            // Raw frame wraps.
+        assert_eq!(items[1].timestamp, TICKS_PER_HB_FRAME); // delta == 1 -> timestamp advances one frame delta.
     }
 }
