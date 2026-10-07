@@ -293,7 +293,7 @@ mod dump_data_tests {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].body[0], 0xffffff);
         assert_eq!(items[0].timestamp, 0);
-        assert_eq!(items[1].body[0], 0x0000000);            // Raw frame wraps.
-        assert_eq!(items[1].timestamp, TICKS_PER_HB_FRAME); // delta == 1 -> timestamp advances one frame delta.
+        assert_eq!(items[1].body[0], 0x000000);            // Raw frame wraps.
+        assert_eq!(items[1].timestamp, TICKS_PER_HB_FRAME); // delta == 1 -> timestamp advances one frame.
     }
 }
