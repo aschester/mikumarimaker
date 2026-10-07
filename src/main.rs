@@ -190,3 +190,119 @@ fn get_run(parsed : &ArgMatches) -> u32 {
 fn get_source_id(parsed: &ArgMatches) -> u32 {
     *parsed.get_one::<u32>("source-id").expect("There should be a default source-id")
 }
+
+#[cfg(test)]
+mod dump_data_tests {
+    use super::*;
+    use std::io::Cursor;
+    use std::rc::Rc;
+    use std::cell::RefCell;
+
+    const F2: u64 = TICKS_PER_HB_FRAME;   // ticks per frame (= hb_frame_to_ts(1))
+
+    // Records each written frame item: timestamp, source id, and body decoded
+    // as u64 words -> [abs frame number, raw hit, raw hit, ...].
+    #[derive(Clone)]
+    struct Captured { timestamp: u64, source_id: u32, body: Vec<u64> }
+    struct CapSink { items: Rc<RefCell<Vec<Captured>>> }
+    impl DataSink for CapSink {
+        fn open(&mut self, _uri: &str) -> Result<(), String> { Ok(()) }
+        fn write(&mut self, item: &RingItem) -> Result<(), String> {
+            let bh = item.get_bodyheader().unwrap();
+            let p = item.payload();                       // includes 16-byte body header
+            let body = p[16..].chunks_exact(8)
+                .map(|c| u64::from_ne_bytes(c.try_into().unwrap()))
+                .collect();
+            self.items.borrow_mut().push(Captured {
+                timestamp: bh.timestamp, source_id: bh.source_id, body,
+            });
+            Ok(())
+        }
+        fn close(&mut self) {}
+        fn flush(&mut self) {}
+    }
+
+    fn hit(ch: u8, tot: u32, time: u32) -> u64 {
+        mikumari_format::HRTDCLeading::new(ch, tot, time).get()
+    }
+    fn hb(frame: u32) -> u64 {
+        mikumari_format::Delimeter1::new(0, frame).get()
+    }
+    // Run dump_data over a word stream, return what the sink captured.
+    fn run(words: &[u64], sid: u32) -> Vec<Captured> {
+        let mut bytes = Vec::new();
+        for w in words { bytes.extend_from_slice(&w.to_ne_bytes()); }
+        let mut reader = mikumari_format::MikumariReader::new(Box::new(Cursor::new(bytes)));
+        let cap = Rc::new(RefCell::new(Vec::new()));
+        let mut sink: Box<dyn DataSink> = Box::new(CapSink { items: cap.clone() });
+        dump_data(&mut reader, sid, &mut sink);
+        cap.borrow().clone()
+    }
+
+    // ---- trailing heartbeat terminates a frame ----
+
+    // Hits are grouped with the heartbeat that FOLLOWS them; hits before the
+    // first heartbeat are emitted (not skipped); sid is stamped on the item.
+    #[test]
+    fn hits_grouped_with_trailing_heartbeat() {
+        let (a, b) = (hit(0, 10, 100), hit(1, 11, 101));   // belong to frame 100
+        let (c, d) = (hit(0, 12, 200), hit(1, 13, 201));   // belong to frame 101
+        let items = run(&[a, b, hb(100), c, d, hb(101)], 7);
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].source_id, 7);
+        assert_eq!(items[0].body, vec![100, a, b]);        // [abs frame, hits...]
+        assert_eq!(items[1].body, vec![101, c, d]);
+    }
+
+    // Hits after the last heartbeat have no closing heartbeat -> discarded.
+    #[test]
+    fn hits_after_last_heartbeat_dropped() {
+        let (a, b) = (hit(0, 10, 100), hit(1, 11, 101));
+        let (c, d) = (hit(0, 12, 200), hit(1, 13, 201));   // no trailing hb
+        let items = run(&[a, b, hb(100), c, d], 7);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].body, vec![100, a, b]);          // c, d dropped
+    }
+
+    // ---- delta calculation with rollover protection ----
+
+    // Consecutive frames: abs frame number (body[0]) and the relative timestamp
+    // each advance by exactly one frame.
+    #[test]
+    fn consecutive_frames_increment_by_one() {
+        let items = run(&[hit(0,1,1), hb(100),
+                          hit(0,1,2), hb(101),
+                          hit(0,1,3), hb(102)], 7);
+        assert_eq!(items.len(), 3);
+        assert_eq!((items[0].body[0], items[0].timestamp), (100, 0));
+        assert_eq!((items[1].body[0], items[1].timestamp), (101, F2));
+        assert_eq!((items[2].body[0], items[2].timestamp), (102, 2 * F2));
+    }
+
+    // Missing frame (100 -> 102): rel_frame += delta, so the gap shows up as a
+    // full frame jump in both number and timestamp. (The stderr warning is
+    // visible with `cargo test -- --nocapture`.)
+    #[test]
+    fn missing_frame_leaves_a_gap() {
+        let items = run(&[hit(0,1,1), hb(100),
+                          hit(0,1,2), hb(102)], 7);          // 101 dropped
+        assert_eq!(items.len(), 2);
+        assert_eq!((items[0].body[0], items[0].timestamp), (100, 0));
+        assert_eq!((items[1].body[0], items[1].timestamp), (102, 2 * F2)); // +2, not +1
+    }
+
+    // 24-bit rollover 0xffffff -> 0x000000 is a delta of 1 (rollover protection):
+    // no gap, and the ABSOLUTE counter keeps counting as a non-rolling u64.
+    #[test]
+    fn frame_rollover_is_one_step() {
+        let items = run(&[hit(0,1,1), hb(0xffffff),
+                          hit(0,1,2), hb(0x000000)], 7);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].body[0], 0xffffff);
+        assert_eq!(items[0].timestamp, 0);
+        assert_eq!(items[1].body[0], 0x1000000);   // first(0xffffff)+rel(1), not wrapped to 0
+        assert_eq!(items[1].timestamp, F2);         // delta == 1 -> advances one frame
+    }
+}
