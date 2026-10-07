@@ -1,12 +1,10 @@
 #![allow(unused)]
-///! Contains the formatting  stuff for mikumari data
-///! 
-///! 
-///! 
+//! Contains the formatting stuff for mikumari data
 
 pub const MIKUMARI_FRAME_ITEM_TYPE: u32=51;
 use std::io::Read;
 use std::io;
+
 // Data type values:
 
 pub const TDC_LEADING_DATA : u8 = 0b001011;
@@ -15,24 +13,24 @@ pub const INPUT_THROTTLE_T1_START : u8 = 0b0011001;
 pub const INPUT_THROTTLE_T1_END : u8 = 0b010001;
 pub const INPUT_THROTTLE_T2_START : u8 = 0b010010;
 pub const INPUT_THROTTLE_T2_END : u8   = 0b010010;
-pub const DELIMETER1  : u8 = 0b011100;
-pub const DELIMETER2  : u8 = 0b011110;
+pub const DELIMETER1 : u8 = 0b011100;
+pub const DELIMETER2 : u8 = 0b011110;
 
-/// A heartbeat delimieter1 and its data:
-/// 
-
+/// A heartbeat delimieter 1 and its data.
 pub struct Delimeter1 {
-
     delimeter : u64
 }
+
+/// A heartbeat delimieter 2 and its data.
 pub struct Delimeter2 {
     delimeter : u64
 }
-// Sample does not show the throttles so skip to the chase:
-// Not sure how software tells the difference between high and 
-// low resolution as I don't see separate data types for them.
-// Assumption:  Time over threshold will only be present in the trailing
-// time as the TOT is from leading to trailing edge(?).
+
+/// Sample does not show the throttles so skip to the chase: Not sure how 
+/// software tells the difference between high and low resolution as I don't 
+/// see separate data types for them. The HRTDC carries time-over-threshold in 
+/// the leading-edge word itself (issue #11), so a hit is reported once as a 
+/// leading edge with its TOT.
 pub struct HRTDCLeading {
     leading : u64
 }
@@ -46,7 +44,8 @@ pub struct LRTDCLeading {
 pub struct LRTDCTrailing {
     trailing : u64
 }
-// TODO: range check the inputs as they're not full sized.
+
+// @todo: range check the inputs as they're not full sized.
 impl Delimeter1 {
     pub fn new(time_offset : u16, frame_number: u32) -> Delimeter1 {
         let mut value : u64 = 0;
@@ -73,6 +72,7 @@ impl Delimeter1 {
         (self.delimeter >> 24) & 0xffff
     }
 }
+
 impl Delimeter2 {
     pub fn new(data_size: u32)-> Delimeter2 {
         let mut value = 0u64;
@@ -83,7 +83,6 @@ impl Delimeter2 {
         Delimeter2 {
             delimeter : value
         }
-
     }
     pub fn fromu64(data: u64) -> Delimeter2 {
         Delimeter2 {
@@ -97,6 +96,7 @@ impl Delimeter2 {
         self.delimeter & 0xfffff
     }  
 }
+
 impl HRTDCLeading {
     pub fn new(chan : u8, tot : u32, time : u32) -> HRTDCLeading {
         let mut value = (TDC_LEADING_DATA as u64) << 58;
@@ -111,10 +111,7 @@ impl HRTDCLeading {
     pub fn fromu64(data : u64)-> HRTDCLeading {
         HRTDCLeading  { leading : data}
     }
-    // Getters:
-
-    pub fn channel(&self) -> u8 {
-        
+    pub fn channel(&self) -> u8 {        
         ((self.leading  >> 51) & 0x7f) as u8
     }
     pub fn tot(&self) -> u32 {
@@ -127,14 +124,13 @@ impl HRTDCLeading {
         self.leading
     }
 }
-// In fact, other than the data type fie.d, 
-// this is just like the leading edge so we do do some dirty stuff.
 
+// In fact, other than the data type field, this is just like the leading edge
+// so we do some dirty stuff.
 impl HRTDCTrailing {
     pub fn new(chan : u8, tot : u32, time : u32) -> HRTDCTrailing {
         let leading = HRTDCLeading::new(chan, tot, time);
-        // maks off the data type and replace it with 0x34
-
+        // Mask off the data type and replace it with the trailing data type:
         let mut data = leading.leading;
         data &= !((TDC_LEADING_DATA as u64) << 58);
         data |= (TDC_TRAILING_DATA as u64)<< 58;
@@ -148,11 +144,10 @@ impl HRTDCTrailing {
             trailing: data
         }
     }
-    // Here's where the dirt is, we use the LE functions.
-    // The dirt we use in this method gets used in all others as well.
+    // Here's where the dirt is, we use the LE functions. The dirt we use in 
+    // this method gets used in all others as well.
     pub fn channel(&self) -> u8 {
-        let leading = HRTDCLeading { leading: self.trailing};  // the dirt:
-        
+        let leading = HRTDCLeading { leading: self.trailing};        
         leading.channel()
     }
     pub fn tot(&self) -> u32 {
@@ -168,8 +163,7 @@ impl HRTDCTrailing {
     }
 }
 
-// This enum is data that can come from a Mikumari data source:
-
+/// This enum is data that can come from a Mikumari data source.
 pub enum MikumariDatum {
     Heartbeat0(Delimeter1),
     Heartbeat1(Delimeter2),
@@ -177,10 +171,11 @@ pub enum MikumariDatum {
     TrailingEdge(HRTDCTrailing),
     Other(u64)
 }
+
 impl MikumariDatum {
     pub fn from_u64(datum : u64 ) -> MikumariDatum {
-        let dtype :u8 = (datum >> (64-6)) as u8;             // Position the  type.
-
+        // Width of the word is 64 bits, the type is in the top 6 bits:
+        let dtype :u8 = (datum >> (64-6)) as u8; // Position the type.
         if dtype == TDC_LEADING_DATA {
             MikumariDatum::LeadingEdge(HRTDCLeading::fromu64(datum))
         } else if dtype == TDC_TRAILING_DATA {
@@ -194,9 +189,11 @@ impl MikumariDatum {
         }
     }
 }
+
 pub struct MikumariReader {
     source : Box<dyn Read>,
 }
+
 impl MikumariReader {
     // Read the next u64 for the data source:
     fn readu64(&mut self) -> io::Result<u64> {
@@ -206,7 +203,6 @@ impl MikumariReader {
         Ok(u64::from_ne_bytes(buf))
 
     }
-
     pub fn new(src : Box<dyn Read>) -> MikumariReader  {
         MikumariReader {
             source : src
@@ -214,9 +210,7 @@ impl MikumariReader {
     }
     pub fn read(&mut self) -> io::Result<MikumariDatum> {
         let datum = self.readu64()?;
-
-        // Based on the format field, we return the right type of datum.
-
+        // Based on the format field, we return the right type of datum:
         Ok(MikumariDatum::from_u64(datum))
     }
 } 
@@ -241,6 +235,7 @@ mod delim1test {
         assert_eq!((d.get() >> 24) & 0xffff, 65535);
     }
 }
+
 #[cfg(test)]
 mod delim2test {
     use super::*;
@@ -262,6 +257,7 @@ mod delim2test {
         assert_eq!((d.get() >> 20) & 0xfffff, 12345u64);
     }
 }
+
 #[cfg(test)] 
 mod hrtdc {
     use super::*;
@@ -292,7 +288,8 @@ mod hrtdc {
         let leading = HRTDCLeading::new(10, 100, 12345);
         assert_eq!(leading.time(), 12345);
     }
-    // trailing edge tests
+
+    // Trailing edge tests:
 
     #[test]
         fn trailing_new() {

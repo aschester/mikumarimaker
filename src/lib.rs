@@ -1,5 +1,4 @@
+// Public modules of the mikumarimaker library.
 
-// Re publishing other crates:
-
-pub  mod glom;                               // Glom for defenestrator.
+pub mod glom; // Glom for defenestrator.
 pub mod mikumari_format;

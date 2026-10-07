@@ -2,30 +2,24 @@ use mikumarimaker::mikumari_format;
 
 use std::io::{stdin, BufReader, Read};
 use std::fs::File;
+use clap::{value_parser, Arg, ArgAction, Command, ArgMatches};
+use std::time;
+
 use rust_ringitem_format::{RingItem, BodyHeader, ToRaw};
 use rust_ringitem_format::state_change::{StateChange, StateChangeType};  // begin run/end run.
 use frib_datasource::{data_sink_factory, DataSink};
 
-use clap::{value_parser, Arg, ArgAction, Command, ArgMatches};
-use std::time;
-
 // 524.288 us/frame * 10^6 us/ps / 0.9765625 ps/tick = 2^29 ticks/frame
 const TICKS_PER_HB_FRAME: u64 = 1 << 29;
 
-///
-/// We're going to support the following optional uhm.. options.
+/// We're going to support the following optional uhm... options.
 /// --title     - a run title.
 /// --run       - a run number.
 /// --source-id - an event source id.
-///
-
 fn main() ->std::io::Result<()> {
-
-    // Parse the args:
-
     let parser = Command::new("mikumarimaker")
-        .version("0.1.1")
-        .about("Make raw mikumari data into frame ring items")
+        .version("0.3.0")
+        .about("Make raw Mikumari data into frame ring items")
         .arg(Arg::new("title").short('t').long("title").action(ArgAction::Set)
             .required(false).default_value("No title set")
         ).arg(Arg::new("run").short('r').long("run").action(ArgAction::Set)
@@ -44,14 +38,13 @@ fn main() ->std::io::Result<()> {
 
     let title = get_title(&matches);
     let run_num = get_run(&matches);
-    let sid = get_source_id(&matches);
-    
+    let sid = get_source_id(&matches);    
     
     let fname = matches.get_one::<String>("source").expect("Source filename is required").clone();
     let ring_name = matches.get_one::<String>("sink").expect("Sink URI is required").clone();
 
     // Open the file, attach a buffered reader to it and box it to create
-    // a MikumariReader:
+    // a MikumariReader data source:
 
     let source : Box<dyn Read> = 
     if fname == "-" {
@@ -73,7 +66,7 @@ fn main() ->std::io::Result<()> {
 
     let begin_run_time = time::Instant::now();  // Start time of the run.
     let mut b = BodyHeader {
-        timestamp: 0xffffffffffffffff,          // EVB assign timestamp.
+        timestamp: 0xffffffffffffffff,          // Null timestamp for begin run item.
         source_id : sid,
         barrier_type: 1                         // Begin run barrier.
     };
@@ -92,7 +85,7 @@ fn main() ->std::io::Result<()> {
     // The end run item:
 
     let elapsed = begin_run_time.elapsed();
-    b.barrier_type = 2;                          // end run barrier.
+    b.barrier_type = 2;                          // End run barrier.
     let end_run = StateChange::new_with_body_header(
         StateChangeType::End,
         &b,
@@ -104,16 +97,17 @@ fn main() ->std::io::Result<()> {
     Ok(())
 }
 
-//  * sid  - user source id, stamped on every frame item.
-// Ring items are built by buffering hits and emitting them when the trailing heartbeat that 
-// closes the frame arrives. That heartbeat's frame number labels and timestamps every hit 
-// that preceded it.
-//  * The ring item body looks like: [absolute frame number : u64][raw hit 0: u64]...
-//  * The body-header timestamp is relative (first emitted frame = 0) and is
-//    advanced by the real heartbeat-to-heartbeat frame delta, so dropped
-//    frames and the 24-bit frame-number rollover are handled correctly.
-//  * Hits after the final heartbeat have no closing heartbeat, so that trailing
-//    partial frame cannot be timestamped and is discarded at EOF.
+/// Build frame ring items by buffering hits and emitting them when the
+/// trailing heartbeat that closes the frame arrives: that heartbeat's frame
+/// number labels and timestamps every hit that preceded it.
+///
+/// * `sid` - user source id, stamped on every frame item.
+/// * Body layout: `[absolute frame number : u64][raw hit 0 : u64]...`
+/// * The body-header timestamp is relative (first emitted frame = 0), advanced
+///   by the real heartbeat-to-heartbeat frame delta, so dropped frames and the
+///   24-bit frame-number rollover are handled correctly.
+/// * Hits after the final heartbeat have no closing heartbeat, so that trailing
+///   partial frame is discarded at EOF.
 fn dump_data(src: &mut mikumari_format::MikumariReader, sid: u32,
              rf: &mut Box<dyn DataSink>) {
     let mut buf: Vec<u64> = Vec::new();        // raw hit words for the open frame

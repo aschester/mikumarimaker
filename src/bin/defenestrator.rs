@@ -1,31 +1,32 @@
 use mikumarimaker::{mikumari_format, glom};
-use rust_ringitem_format::{RingItem, BEGIN_RUN, END_RUN};
-use frib_datasource::{data_source_factory,  data_sink_factory};
+
 use std::mem::size_of;
 use clap::{value_parser, Arg, ArgAction, Command};
 
+use rust_ringitem_format::{RingItem, BEGIN_RUN, END_RUN};
+use frib_datasource::{data_source_factory,  data_sink_factory};
 
-// Ring items generated will  be PHYSICS_EVENT 
-// Output will be 
-// zero or more repetitions of hits of the form:
-// | r/f channel           | 16 bits, top bit is 1 for trailing edge.
-// | absolute-time         | 64 bits. computed by adding the timestamp to the hit time.
-// | Absolute frame number | 64 bits.
-//
-//   If I've done arithmetic properly, it's 213 days before the absolute time should
-//   wrap.
-// Usage:
-//    defenestrator --dt coincidence-interval sourced sink.
-//
-// Source and sink are URI's --dt is in tdc units.
-//
+/// Ring items generated are PHYSICS_EVENT. The body is zero or more hits:
+/// | channel/edge | u16 — top bit set for a trailing edge
+/// | absolute time| u64 — hit time + the frame item's timestamp
+/// | TOT          | u32 — time over threshold
+/// Frame boundaries appear as a pseudo-hit: channel 0xffff, time = absolute
+/// frame number, TOT = 0xffffffff.
+///
+/// If I've done arithmetic properly, it's 213 days before the absolute time 
+/// should wrap.
+///
+/// Usage:
+///    defenestrator --dt coincidence-interval source sink.
+///
+/// Source and sink are URIs, --dt is in TDC ticks.
+///
 fn main() {
     // Define the command line parameter for clap:
-
     let parser = Command::new("defenestrator")
-        .version("0.2.0").about("Defenestrates mikumari time data (AMANEQ)")
+        .version("0.3.0").about("Defenestrates Mikumari time data")
         .arg(Arg::new("dt")
-            .short('t').long("dt").required(true).help("Coincidence interval")
+            .short('t').long("dt").required(true).help("Coincidence interval (ticks)")
             .action(ArgAction::Set)
             .value_parser(value_parser!(u64))
         )
@@ -34,13 +35,13 @@ fn main() {
 
     let matches = parser.get_matches();
 
-    // Process the command line arguments.
+    // Process the command line arguments:
 
     let ring_uri = matches.get_one::<String>("source").expect("No data source given");
     let out_path = matches.get_one::<String>("sink").expect("No data sink given");
-    let glom_dt = matches.get_one::<u64>("dt").expect("No --dt given for gloming");
+    let glom_dt = matches.get_one::<u64>("dt").expect("No --dt given for glomming");
 
-    // open the source:
+    // Open the source:
 
     let mut source = data_source_factory(&ring_uri).expect("Could not open ring item source");
     let sink   = data_sink_factory(&out_path).expect("Could not open ring item sink");
@@ -49,12 +50,13 @@ fn main() {
 
     let mut glom = glom::Glom::new(sink, 0, *glom_dt);
 
-    // Process the items.
+    // Process the items:
 
     while let Some(item) = source.read() {
         convert_item(&item, &mut glom);
     }
-    // In case there's no eof, flush glom.
+
+    // In case there's no EOF, flush glom:
 
     glom.flush()
 
@@ -62,47 +64,38 @@ fn main() {
 
 
 fn convert_item(item : &RingItem, glom  : &mut glom::Glom) {
-    // if the ring item is not a MIKUMARI frame, just pass it unaltered.
-
+    // If the ring item is not a MIKUMARI frame, just pass it unaltered.
     let item_type = item.type_id();
     if item_type != mikumari_format::MIKUMARI_FRAME_ITEM_TYPE {
-        // some are special:
-
-        
+        // Some are special:        
         if item_type == BEGIN_RUN {
-            // Set the source id from the ring item.
-
+            // Set the source id from the ring item:
             if let Some(bh) = item.get_bodyheader() {
                 glom.set_sid(bh.source_id);
             }
-
-        } else if item_type == END_RUN {     // Flush event being built at end run.
+        } else if item_type == END_RUN { // Flush event being built at end run.
             glom.flush();
         }
         glom.write_item(item)
-
     } else {
-
         let bh = item.get_bodyheader().unwrap();
         let t0 = bh.timestamp;
         let payload = item.payload();    // Vec<u8>
         glom.set_sid(bh.source_id);      // In case there's no BEGIN e.g.
-
         
-        // We are assured there's an absolute frame number (64 bits)
+        // We are assured there's an absolute frame number (64 bits).
         // Payload includes the body header.
 
-        let mut cursor = size_of::<u64>() + 2 * size_of::<u32>(); // skip body header.
+        let mut cursor = size_of::<u64>() + 2 * size_of::<u32>(); // Skip body header.
         let absolute_fno = u64::from_ne_bytes(payload[cursor..cursor+size_of::<u64>()].try_into().unwrap());
 
         // Sort the hits and add them to the glommer:
 
-        let mut orderer = glom::Orderer::new();  // last channel not num
+        let mut orderer = glom::Orderer::new();
 
-        cursor += size_of::<u64>();   // First (if any) data item:
+        cursor += size_of::<u64>();      // First (if any) data item:
         while cursor < payload.len() {
-            let raw = u64::from_ne_bytes(payload[cursor..cursor+size_of::<u64>()].try_into().unwrap());
-            
+            let raw = u64::from_ne_bytes(payload[cursor..cursor+size_of::<u64>()].try_into().unwrap());            
             match mikumari_format::MikumariDatum::from_u64(raw) {
                 mikumari_format::MikumariDatum::LeadingEdge(le)  => {
                     let t : u64 = le.time() as u64 + t0;
@@ -113,20 +106,20 @@ fn convert_item(item : &RingItem, glom  : &mut glom::Glom) {
                     let t : u64 = te.time() as u64 + t0;
                     orderer.add_hit(false, te.channel() as u16, t, te.tot());
                 },
-                _ => {},              // Anything else is not passed through.
+                _ => {},                 // Anything else is not passed through.
             }
-
             cursor += size_of::<u64>();
         }
-        // Get hits from the orderer and put them in glom
-        // which will merge into events:
+
+        // Get hits from the orderer and put them in glom:
 
         let merged_hits = orderer.order();
         for (rising, chan, time, tot) in &merged_hits {
             glom.add_hit(*rising, *chan as u8, *time, *tot);
         }
 
-        // Trailing frame boundry: …[frame f hits][marker f][frame f+1 hits]…
+        // Trailing frame boundry: ...[frame f hits][marker f][frame f+1 hits]...
+
         glom.add_frame_boundary(absolute_fno);
     }
 }
