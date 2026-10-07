@@ -198,10 +198,8 @@ mod dump_data_tests {
     use std::rc::Rc;
     use std::cell::RefCell;
 
-    const F2: u64 = TICKS_PER_HB_FRAME;   // ticks per frame (= hb_frame_to_ts(1))
-
     // Records each written frame item: timestamp, source id, and body decoded
-    // as u64 words -> [abs frame number, raw hit, raw hit, ...].
+    // as u64 words -> [abs frame number][raw hit 0][raw hit1]...
     #[derive(Clone)]
     struct Captured { timestamp: u64, source_id: u32, body: Vec<u64> }
     struct CapSink { items: Rc<RefCell<Vec<Captured>>> }
@@ -263,7 +261,7 @@ mod dump_data_tests {
         let items = run(&[a, b, hb(100), c, d], 7);
 
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].body, vec![100, a, b]);          // c, d dropped
+        assert_eq!(items[0].body, vec![100, a, b]);        // c, d dropped
     }
 
     // ---- delta calculation with rollover protection ----
@@ -277,8 +275,8 @@ mod dump_data_tests {
                           hit(0,1,3), hb(102)], 7);
         assert_eq!(items.len(), 3);
         assert_eq!((items[0].body[0], items[0].timestamp), (100, 0));
-        assert_eq!((items[1].body[0], items[1].timestamp), (101, F2));
-        assert_eq!((items[2].body[0], items[2].timestamp), (102, 2 * F2));
+        assert_eq!((items[1].body[0], items[1].timestamp), (101, TICKS_PER_HB_FRAME));
+        assert_eq!((items[2].body[0], items[2].timestamp), (102, 2 * TICKS_PER_HB_FRAME));
     }
 
     // Missing frame (100 -> 102): rel_frame += delta, so the gap shows up as a
@@ -290,7 +288,7 @@ mod dump_data_tests {
                           hit(0,1,2), hb(102)], 7);          // 101 dropped
         assert_eq!(items.len(), 2);
         assert_eq!((items[0].body[0], items[0].timestamp), (100, 0));
-        assert_eq!((items[1].body[0], items[1].timestamp), (102, 2 * F2)); // +2, not +1
+        assert_eq!((items[1].body[0], items[1].timestamp), (102, 2 * TICKS_PER_HB_FRAME)); // +2, not +1
     }
 
     // 24-bit rollover 0xffffff -> 0x000000 is a delta of 1 (rollover protection):
@@ -303,6 +301,6 @@ mod dump_data_tests {
         assert_eq!(items[0].body[0], 0xffffff);
         assert_eq!(items[0].timestamp, 0);
         assert_eq!(items[1].body[0], 0x1000000);   // first(0xffffff)+rel(1), not wrapped to 0
-        assert_eq!(items[1].timestamp, F2);         // delta == 1 -> advances one frame
+        assert_eq!(items[1].timestamp, TICKS_PER_HB_FRAME); // delta == 1 -> advances one frame
     }
 }
